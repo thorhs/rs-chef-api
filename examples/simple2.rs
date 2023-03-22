@@ -2,7 +2,6 @@ extern crate chef;
 extern crate chef_api;
 
 extern crate env_logger;
-#[macro_use]
 extern crate log;
 
 extern crate serde_json;

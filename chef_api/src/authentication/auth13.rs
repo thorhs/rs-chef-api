@@ -1,13 +1,13 @@
-use crate::authentication::BASE64_AUTH;
-use crate::http_headers::*;
 use crate::utils::{expand_string, squeeze_path};
+use base64::{engine::general_purpose, Engine as _};
 use chrono::*;
 use failure::Error;
-use hyper::header::Headers;
+use hyper::header::{HeaderMap, HeaderName, HeaderValue};
+use itertools::Itertools;
 use openssl::hash::{hash, MessageDigest};
 use openssl::pkey::PKey;
 use openssl::sign::Signer;
-use rustc_serialize::base64::ToBase64;
+use std::convert::TryFrom;
 use std::fmt;
 
 pub struct Auth13 {
@@ -59,7 +59,8 @@ impl Auth13 {
     fn content_hash(&self) -> Result<String, Error> {
         let body = expand_string(&self.body);
         debug!("Content body is: {:?}", body);
-        let content = hash(MessageDigest::sha256(), body.as_bytes())?.to_base64(BASE64_AUTH);
+        let content = hash(MessageDigest::sha256(), body.as_bytes())?;
+        let content = general_purpose::STANDARD.encode(content);
         debug!("Content hash is: {:?}", content);
         Ok(content)
     }
@@ -89,23 +90,29 @@ impl Auth13 {
         let mut signer = Signer::new(MessageDigest::sha256(), &key)?;
         signer.update(cr).unwrap();
         let result = signer.sign_to_vec()?;
-        let result = result.to_base64(BASE64_AUTH);
+        let result = general_purpose::STANDARD.encode(result);
         debug!("base64 encoded result is {:?}", result);
         Ok(result)
     }
 
-    pub fn build(self, headers: &mut Headers) -> Result<(), Error> {
+    pub fn build(self, headers: &mut HeaderMap) -> Result<(), Error> {
         let hsh = self.content_hash()?;
-        headers.set(OpsContentHash(hsh));
-        headers.set(OpsSign(String::from("algorithm=sha256;version=1.3")));
-        headers.set(OpsTimestamp(self.date.clone()));
-        headers.set(OpsUserId(self.userid.clone()));
+
+        headers.insert("X-Ops-Content-Hash", HeaderValue::from_str(&hsh)?);
+        headers.insert(
+            "X-Ops-Sign",
+            HeaderValue::from_str("algorithm=sha256;version=1.3")?,
+        );
+        headers.insert("X-Ops-Timestamp", HeaderValue::from_str(&self.date)?);
+        headers.insert("X-Ops-Userid", HeaderValue::from_str(&self.userid)?);
 
         let enc = self.signed_request()?;
         let mut i = 1;
-        for h in enc.split('\n') {
+        for h in &enc.bytes().chunks(60) {
             let key = format!("X-Ops-Authorization-{}", i);
-            headers.set_raw(key, vec![h.as_bytes().to_vec()]);
+            let value = h.collect::<Vec<_>>();
+            let value = HeaderValue::from_bytes(&value)?;
+            headers.insert(HeaderName::try_from(key)?, value);
             i += 1;
         }
         Ok(())
@@ -116,10 +123,10 @@ impl Auth13 {
 mod tests {
     use super::Auth13;
 
+    use base64::{engine::general_purpose, Engine as _};
     use openssl::hash::MessageDigest;
     use openssl::pkey::PKey;
     use openssl::sign::Verifier;
-    use rustc_serialize::base64::FromBase64;
     use std::fs::File;
     use std::io::Read;
 
@@ -172,7 +179,7 @@ mod tests {
         let sig = &auth.signed_request().unwrap();
         let req = &auth.canonical_request().unwrap();
 
-        let sig_raw = sig.clone().from_base64().unwrap();
+        let sig_raw = general_purpose::STANDARD.decode(&sig).unwrap();
         let mut key: Vec<u8> = vec![];
         let mut fh = File::open(PRIVATE_KEY).unwrap();
         fh.read_to_end(&mut key).unwrap();
@@ -184,13 +191,12 @@ mod tests {
 
         assert_eq!(
             sig,
-            "FZOmXAyOBAZQV/uw188iBljBJXOm+m8xQ/8KTGLkgGwZNcRFxk1m953XjE3W\n\
-             VGy1dFT76KeaNWmPCNtDmprfH2na5UZFtfLIKrPv7xm80V+lzEzTd9WBwsfP\n\
-             42dZ9N+V9I5SVfcL/lWrrlpdybfceJC5jOcP5tzfJXWUITwb6Z3Erg3DU3Uh\n\
-             H9h9E0qWlYGqmiNCVrBnpe6Si1gU/Jl+rXlRSNbLJ4GlArAPuL976iTYJTzE\n\
-             MmbLUIm3JRYi00Yb01IUCCKdI90vUq1HHNtlTEu93YZfQaJwRxXlGkCNwIJe\n\
+            "FZOmXAyOBAZQV/uw188iBljBJXOm+m8xQ/8KTGLkgGwZNcRFxk1m953XjE3W\
+             VGy1dFT76KeaNWmPCNtDmprfH2na5UZFtfLIKrPv7xm80V+lzEzTd9WBwsfP\
+             42dZ9N+V9I5SVfcL/lWrrlpdybfceJC5jOcP5tzfJXWUITwb6Z3Erg3DU3Uh\
+             H9h9E0qWlYGqmiNCVrBnpe6Si1gU/Jl+rXlRSNbLJ4GlArAPuL976iTYJTzE\
+             MmbLUIm3JRYi00Yb01IUCCKdI90vUq1HHNtlTEu93YZfQaJwRxXlGkCNwIJe\
              fy49QzaCIEu1XiOx5Jn+4GmkrZch/RrK9VzQWXgs+w=="
         )
     }
-
 }

@@ -23,9 +23,9 @@ pub enum ChefError {
         display = "An error occurred attempting to parse the Chef Server URL: {}",
         _0
     )]
-    UriError(#[cause] hyper::error::UriError),
+    UriError(#[cause] hyper::Error),
     #[fail(display = "An error occurred communicating to the Chef Server: {}", _0)]
-    HTTPError(#[cause] hyper::error::Error),
+    HTTPError(#[cause] hyper::Error),
     #[fail(display = "An error occurred when using the API client: {}", _0)]
     BorrowError(#[cause] std::cell::BorrowMutError),
     #[fail(display = "Failed to parse credentials file: {}", _0)]

@@ -33,15 +33,13 @@ extern crate failure;
 
 extern crate chrono;
 extern crate openssl;
-extern crate rustc_serialize;
 extern crate url;
 
 extern crate futures;
 
-#[macro_use]
 extern crate hyper;
 extern crate hyper_openssl;
-extern crate tokio_core;
+extern crate tokio;
 
 #[macro_use]
 extern crate log;
@@ -58,7 +56,6 @@ extern crate dirs;
 pub use crate::errors::*;
 pub mod authentication;
 pub mod errors;
-mod http_headers;
 #[macro_use]
 mod macros;
 pub mod credentials;

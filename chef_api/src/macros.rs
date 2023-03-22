@@ -14,24 +14,20 @@ macro_rules! import {
         use $crate::authentication::auth11::Auth11;
         use $crate::authentication::auth13::Auth13;
         use $crate::credentials::Config;
-        use $crate::http_headers::*;
         use $crate::utils::add_path_element;
 
         use serde::Serialize;
         use serde_json;
 
-        use std::cell::RefCell;
         use std::rc::Rc;
 
-        use futures::{Future, Stream};
-        use tokio_core::reactor::Core;
+        use tokio::runtime::Runtime;
 
         use hyper::client::HttpConnector;
-        use hyper::header::{qitem, Accept, ContentLength, ContentType};
-        use hyper::mime::APPLICATION_JSON;
+        use hyper::header::{self, HeaderValue};
         use hyper::Client as HyperClient;
         use hyper::{Method, Request};
-        use hyper_openssl::HttpsConnector;
+        use hyper_tls::HttpsConnector;
     };
 }
 
@@ -90,7 +86,6 @@ macro_rules! request_type {
         #[derive(Debug, Clone)]
         pub struct $n<'c> {
             pub(crate) client: &'c Rc<HyperClient<HttpsConnector<HttpConnector>>>,
-            pub(crate) core: &'c Rc<RefCell<Core>>,
             pub(crate) config: &'c Config,
             pub(crate) path: String,
             pub(crate) api_version: String,
@@ -109,7 +104,6 @@ macro_rules! requests {
                 Self {
                     config: &api.config,
                     client: &api.client,
-                    core: &api.core,
                     path,
                     api_version: String::from("1"),
                     q: None,
@@ -128,7 +122,6 @@ macro_rules! requests {
                 Self {
                     config: &api.config,
                     client: &api.client,
-                    core: &api.core,
                     path,
                     api_version: String::from("1"),
                     q: None,
@@ -148,7 +141,6 @@ macro_rules! requests {
                 Self {
                     config: &api.config,
                     client: &api.client,
-                    core: &api.core,
                     path,
                     api_version: String::from("1"),
                     q: None,
@@ -189,14 +181,14 @@ macro_rules! execute {
                 }
 
                 let mth = match method {
-                    "put" => Method::Put,
-                    "post" => Method::Post,
-                    "delete" => Method::Delete,
-                    "head" => Method::Head,
-                    _ => Method::Get,
+                    "put" => Method::PUT,
+                    "post" => Method::POST,
+                    "delete" => Method::DELETE,
+                    "head" => Method::HEAD,
+                    _ => Method::GET,
                 };
 
-                let mut request = Request::new(mth, url.as_str().parse()?);
+                let mut req_builder = Request::builder().method(mth).uri(url.as_str());
 
                 let body = match body {
                     Some(b) => serde_json::to_string(&b)?,
@@ -212,7 +204,7 @@ macro_rules! execute {
                         &api_version,
                         Some(body.clone().into()),
                     )
-                    .build(request.headers_mut())?,
+                    .build(req_builder.headers_mut().unwrap())?,
                     _ => Auth13::new(
                         &path,
                         &key,
@@ -221,48 +213,54 @@ macro_rules! execute {
                         &api_version,
                         Some(body.clone().into()),
                     )
-                    .build(request.headers_mut())?,
+                    .build(req_builder.headers_mut().unwrap())?,
                 };
 
-                let json = APPLICATION_JSON;
-                request.headers_mut().set(Accept(vec![qitem(json.clone())]));
-                request.headers_mut().set(ContentType::json());
-                request
-                    .headers_mut()
-                    .set(ContentLength(body.clone().len() as u64));
-                request.headers_mut().set(OpsApiInfo(1));
-                request.headers_mut().set(OpsApiVersion(1));
-                request
-                    .headers_mut()
-                    .set(ChefVersion(String::from("13.3.34")));
+                req_builder.headers_mut().map(|h| {
+                    h.insert(
+                        header::ACCEPT,
+                        HeaderValue::from_str("application/json").unwrap(),
+                    );
+                    h.insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_str("application/json").unwrap(),
+                    );
+                    h.insert(
+                        header::CONTENT_LENGTH,
+                        HeaderValue::from(body.clone().len() as u64),
+                    );
+                    h.insert("X-Ops-Server-API-Info", HeaderValue::from(1 as u64));
+                    h.insert("X-Ops-Server-API-Version", HeaderValue::from(1 as u64));
+                    h.insert("X-Chef-Version", HeaderValue::from_str("13.3.34").unwrap());
+                });
 
-                request.set_body(body);
+                let request = req_builder.body(body.into())?;
 
                 let client = self.client;
-                let resp = client
-                    .request(request)
-                    .map_err(ChefError::HTTPError)
-                    .and_then(|res| {
-                        debug!("Status is {:?}", res.status());
+                let resp = async {
+                    let res = client
+                        .request(request)
+                        .await
+                        .map_err(ChefError::HTTPError)?;
+                    debug!("Status is {:?}", res.status());
 
-                        let status = res.status();
-                        res.body()
-                            .concat2()
-                            .map_err(ChefError::HTTPError)
-                            .and_then(move |body| {
-                                let body: Value =
-                                    serde_json::from_slice(&body).map_err(ChefError::JsonError)?;
+                    let status = res.status();
+                    let body = hyper::body::to_bytes(res.into_body())
+                        .await
+                        .map_err(ChefError::HTTPError)?;
 
-                                if status.is_success() {
-                                    Ok(body)
-                                } else {
-                                    Err(ChefError::ChefServerResponseError(status.as_u16()))
-                                }
-                            })
-                    });
+                    let body: Value =
+                        serde_json::from_slice(&body).map_err(ChefError::JsonError)?;
 
-                let mut core = self.core.try_borrow_mut()?;
-                core.run(resp).map_err(|e| e.into())
+                    if status.is_success() {
+                        Ok(body)
+                    } else {
+                        Err(ChefError::ChefServerResponseError(status.as_u16()))
+                    }
+                };
+
+                let rt = Runtime::new()?;
+                rt.block_on(resp).map_err(|e| e.into())
             }
         }
     };
