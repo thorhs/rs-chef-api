@@ -18,7 +18,7 @@ tokio-core = "0.1"
 hyper = "0.11"
 hyper-openssl = "0.5"
 
-url = "1.6"
+url = "2"
 chrono = "0.4"
 openssl = "0.10"
 env_logger = "0.4"
