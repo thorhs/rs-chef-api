@@ -11,7 +11,7 @@ use chef::models::*;
 use chef_api::api_client::*;
 
 pub fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
     let client = ApiClient::from_credentials(None).unwrap();
 
     println!("Starting search");
