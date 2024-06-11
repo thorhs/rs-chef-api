@@ -60,6 +60,7 @@ macro_rules! model_result {
                 let mut output: Vec<$model> = Vec::new();
 
                 for json_node in list.as_array().unwrap().to_owned() {
+                    log::trace!("{:?}", &json_node);
                     output.push($model::try_from(json_node).unwrap());
                 }
 
@@ -139,3 +140,5 @@ pub mod cookbook;
 pub use self::cookbook::*;
 pub mod client;
 pub use self::client::*;
+pub mod partial_result;
+pub use self::partial_result::*;
