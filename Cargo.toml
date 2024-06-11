@@ -28,3 +28,6 @@ dev = ["clippy"]
 
 [workspace]
 members = [ "chef_api" ]
+
+[package.metadata.release]
+publish = false
