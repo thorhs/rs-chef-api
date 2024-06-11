@@ -2,14 +2,11 @@ use crate::credentials::Config;
 
 use hyper::client::HttpConnector;
 use hyper::Client as HyperClient;
-use hyper_openssl::HttpsConnector;
-
-use tokio_core::reactor::Core;
+use hyper_tls::HttpsConnector;
 
 use failure::Error;
 use serde::ser::*;
 use serde_json::Value;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::requests::*;
@@ -21,24 +18,17 @@ pub struct ApiClient {
     pub config: Config,
     /// The Hyper HTTP Client.
     pub client: Rc<HyperClient<HttpsConnector<HttpConnector>>>,
-    /// The async core
-    pub core: Rc<RefCell<Core>>,
 }
 
 impl ApiClient {
     /// Create a new ApiClient struct. It takes a `Config` type. Typically one would use
     /// `from_credentials` rather than calling this directly.
     pub fn new(config: Config) -> Result<Self, Error> {
-        let core = Core::new()?;
-        let handle = core.handle();
-
-        let client = HyperClient::configure()
-            .connector(HttpsConnector::new(4, &handle)?)
-            .build(&handle);
+        let https = HttpsConnector::new();
+        let client = HyperClient::builder().build(https);
 
         Ok(Self {
             config,
-            core: Rc::new(RefCell::new(core)),
             client: Rc::new(client),
         })
     }

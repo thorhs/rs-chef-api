@@ -1,13 +1,13 @@
-use crate::authentication::BASE64_AUTH;
-use crate::http_headers::*;
 use crate::utils::{expand_string, squeeze_path};
+use base64::{engine::general_purpose, Engine as _};
 use chrono::*;
 use failure::Error;
-use hyper::header::Headers;
+use hyper::header::{HeaderMap, HeaderName, HeaderValue};
+use itertools::Itertools;
 use openssl::hash::{hash, MessageDigest};
 use openssl::rsa::Padding;
 use openssl::rsa::Rsa;
-use rustc_serialize::base64::ToBase64;
+use std::convert::TryFrom;
 use std::fmt;
 
 pub struct Auth11 {
@@ -59,20 +59,22 @@ impl Auth11 {
 
     fn hashed_path(&self) -> Result<String, Error> {
         debug!("Path is: {:?}", self.path);
-        let hash = hash(MessageDigest::sha1(), self.path.as_bytes())?.to_base64(BASE64_AUTH);
+        let hash = hash(MessageDigest::sha1(), self.path.as_bytes())?;
+        let hash = general_purpose::STANDARD.encode(hash);
         Ok(hash)
     }
 
     fn content_hash(&self) -> Result<String, Error> {
         let body = expand_string(&self.body);
-        let content = hash(MessageDigest::sha1(), body.as_bytes())?.to_base64(BASE64_AUTH);
+        let content = hash(MessageDigest::sha1(), body.as_bytes())?;
+        let content = general_purpose::STANDARD.encode(content);
         debug!("{:?}", content);
         Ok(content)
     }
 
     fn canonical_user_id(&self) -> Result<String, Error> {
         hash(MessageDigest::sha1(), self.userid.as_bytes())
-            .and_then(|res| Ok(res.to_base64(BASE64_AUTH)))
+            .and_then(|res| Ok(general_purpose::STANDARD.encode(res)))
             .map_err(|res| res.into())
     }
 
@@ -99,22 +101,28 @@ impl Auth11 {
 
         let mut hash: Vec<u8> = vec![0; key.size() as usize];
         key.private_encrypt(cr, &mut hash, Padding::PKCS1)?;
-        Ok(hash.to_base64(BASE64_AUTH))
+        Ok(general_purpose::STANDARD.encode(hash))
     }
 
-    pub fn build(self, headers: &mut Headers) -> Result<(), Error> {
+    pub fn build(self, headers: &mut HeaderMap) -> Result<(), Error> {
         let hsh = self.content_hash()?;
-        headers.set(OpsContentHash(hsh));
+        headers.insert("X-Ops-Content-Hash", HeaderValue::from_str(&hsh)?);
 
-        headers.set(OpsSign(String::from("algorithm=sha1;version=1.1")));
-        headers.set(OpsTimestamp(self.date.clone()));
-        headers.set(OpsUserId(self.userid.clone()));
+        headers.insert(
+            "X-Ops-Sign",
+            HeaderValue::from_str("algorithm=sha1;version=1.1")?,
+        );
+        headers.insert("X-Ops-Timestamp", HeaderValue::from_str(&self.date)?);
+        headers.insert("X-Ops-Userid", HeaderValue::from_str(&self.userid)?);
 
         let enc = self.encrypted_request()?;
         let mut i = 1;
-        for h in enc.split('\n') {
+        for h in &enc.bytes().chunks(60) {
             let key = format!("X-Ops-Authorization-{}", i);
-            headers.set_raw(key, vec![h.as_bytes().to_vec()]);
+            headers.insert(
+                HeaderName::try_from(key)?,
+                HeaderValue::from_bytes(&h.collect::<Vec<_>>())?,
+            );
             i += 1;
         }
         Ok(())
@@ -192,13 +200,12 @@ mod tests {
         };
         assert_eq!(
             &auth.encrypted_request().unwrap(),
-            "UfZD9dRz6rFu6LbP5Mo1oNHcWYxpNIcUfFCffJS1FQa0GtfU/vkt3/O5HuCM\n\
-             1wIFl/U0f5faH9EWpXWY5NwKR031Myxcabw4t4ZLO69CIh/3qx1XnjcZvt2w\n\
-             c2R9bx/43IWA/r8w8Q6decuu0f6ZlNheJeJhaYPI8piX/aH+uHBH8zTACZu8\n\
-             vMnl5MF3/OIlsZc8cemq6eKYstp8a8KYq9OmkB5IXIX6qVMJHA6fRvQEB/7j\n\
-             281Q7oI/O+lE8AmVyBbwruPb7Mp6s4839eYiOdjbDwFjYtbS3XgAjrHlaD7W\n\
+            "UfZD9dRz6rFu6LbP5Mo1oNHcWYxpNIcUfFCffJS1FQa0GtfU/vkt3/O5HuCM\
+             1wIFl/U0f5faH9EWpXWY5NwKR031Myxcabw4t4ZLO69CIh/3qx1XnjcZvt2w\
+             c2R9bx/43IWA/r8w8Q6decuu0f6ZlNheJeJhaYPI8piX/aH+uHBH8zTACZu8\
+             vMnl5MF3/OIlsZc8cemq6eKYstp8a8KYq9OmkB5IXIX6qVMJHA6fRvQEB/7j\
+             281Q7oI/O+lE8AmVyBbwruPb7Mp6s4839eYiOdjbDwFjYtbS3XgAjrHlaD7W\
              FDlbAG7H8Dmvo+wBxmtNkszhzbBnEYtuwQqT8nM/8A=="
         )
     }
-
 }
