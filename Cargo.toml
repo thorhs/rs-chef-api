@@ -19,6 +19,9 @@ log = "0.4"
 chrono = "0.4"
 failure = "0.1"
 
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"]}
+
 [features]
 default = []
 dev = ["clippy"]
