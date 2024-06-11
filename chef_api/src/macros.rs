@@ -249,6 +249,8 @@ macro_rules! execute {
                         .await
                         .map_err(ChefError::HTTPError)?;
 
+                    trace!("{}", String::from_utf8_lossy(&body));
+
                     let body: Value =
                         serde_json::from_slice(&body).map_err(ChefError::JsonError)?;
 
